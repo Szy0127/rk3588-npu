@@ -1,0 +1,19 @@
+[binaries]
+c = '/home/szy/android-ndk-r28-beta2/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android21-clang'
+cpp = '/home/szy/android-ndk-r28-beta2/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android21-clang++'
+ar = '/home/szy/android-ndk-r28-beta2/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar'
+strip = '/home/szy/android-ndk-r28-beta2/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip'
+pkgconfig = 'pkg-config'
+
+[built-in options]
+c_args = '--target=aarch64-linux-android21 --sysroot=/home/szy/android-ndk-r28-beta2/toolchains/llvm/prebuilt/linux-x86_64/sysroot -fPIC -D__ANDROID_API__=21'
+c_link_args = '--target=aarch64-linux-android21 --sysroot=/home/szy/android-ndk-r28-beta2/toolchains/llvm/prebuilt/linux-x86_64/sysroot -fPIC -llog'
+cpp_args = '--target=aarch64-linux-android21 --sysroot=/home/szy/android-ndk-r28-beta2/toolchains/llvm/prebuilt/linux-x86_64/sysroot -fPIC -D__ANDROID_API__=21'
+cpp_link_args = '--target=aarch64-linux-android21 --sysroot=/home/szy/android-ndk-r28-beta2/toolchains/llvm/prebuilt/linux-x86_64/sysroot -fPIC -llog'
+
+[host_machine]
+system = 'android'
+cpu_family = 'aarch64'
+cpu = 'aarch64'
+endian = 'little'
+

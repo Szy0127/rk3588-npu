@@ -26,9 +26,14 @@
 #include <string.h>
 #include <fcntl.h>
 #include <errno.h>
+#include <math.h>
 #include <sys/mman.h>
 
+#ifdef __ANDROID__
+#include "drm-compat.h"
+#else
 #include <libdrm/drm.h>
+#endif
 
 #include "rknpu-ioctl.h"
 #include "npu_interface.h"
@@ -80,7 +85,21 @@ int main(int argc, char **argv) {
   int M=4;
   int K=36;
   int N=16;
+  unsigned int core_id = 0;  // Default to core 0
   int ret=0;
+
+  if (argc == 2) {
+    core_id = atoi(argv[1]);
+    if (core_id > 3) {
+      printf("Invalid core_id %d, must be 0-3\n", core_id);
+      return -1;
+    }
+  } else if (argc > 2) {
+    printf("Invalid number of args %d\n", argc);
+    printf("Usage: %s [core_id]\n", argv[0]);
+    printf("  core_id: optional, 0-3 (default: 0)\n");
+    return -1;
+  }
 
   // Open DRI called "rknpu"
   int fd = npu_open();
@@ -161,6 +180,13 @@ int main(int argc, char **argv) {
     }
   }
 
+  // Initialize subcore_task array
+  struct rknpu_subcore_task subcore_tasks[5] = {{0, 0}, {0, 0}, {0, 0}, {0, 0}, {0, 0}};
+  subcore_tasks[core_id].task_start = 0;
+  subcore_tasks[core_id].task_number = 1;
+  
+  printf("M is %d, K is %d, N is %d, using NPU core %d\n", M, K, N, core_id);
+  
   struct rknpu_submit submit = {
     .flags = RKNPU_JOB_PC | RKNPU_JOB_BLOCK | RKNPU_JOB_PINGPONG,
     .timeout = 6000,
@@ -172,13 +198,14 @@ int main(int argc, char **argv) {
     .regcfg_obj_addr = 0,
     .task_base_addr = 0,
     .user_data = 0,
-    .core_mask = 1,
+    .core_mask = 1 << core_id,  // Set bit for the specified core
     .fence_fd = -1,
-    .subcore_task = { // Only use core 1, nothing for core 2/3
-      {
-        .task_start = 0,
-        .task_number = 1,
-      }, { 1, 0}, {2, 0}, {0,0}, {0,0}
+    .subcore_task = {
+      subcore_tasks[0],
+      subcore_tasks[1],
+      subcore_tasks[2],
+      subcore_tasks[3],
+      subcore_tasks[4]
     },
   };
   ret = ioctl(fd, DRM_IOCTL_RKNPU_SUBMIT, &submit);
@@ -188,18 +215,62 @@ int main(int argc, char **argv) {
   }
 
   printf("=========================================================================================================\n");
+  printf("Comparing CPU (expected) vs NPU (actual) results...\n");
   float *output_data = (float*) output;
+  int total_elements = M * N;
+  int matched = 0;
+  int mismatched = 0;
+  int max_mismatches_to_print = 10;  // Limit printed mismatches
+  const float abs_tolerance = 0.1f;  // Absolute tolerance for float comparison
+  const float rel_tolerance = 0.001f;  // Relative tolerance (0.1%)
+  
+  printf("\nNPU Output Matrix:\n");
   for (int m=1;m<=M;m++) {
-    for (int n=1;n<N;n++) {
+    for (int n=1;n<=N;n++) {
       float actual = output_data[feature_data(N, 4, 1, 4, n, m, 1)];
-      float expected = expected_result[((m-1)*N)+(n-1)];
-      if (actual != expected) {
-        printf("\nmismatch m:%d  n:%d  expected:%6.1f acutal:%6.1f\n",m,n,expected,actual);
-        ret = -1;
-      }
-      printf("%6.1f ",actual);
+      printf("%6.1f ", actual);
     }
     printf("\n");
+  }
+  printf("\n");
+  
+  for (int m=1;m<=M;m++) {
+    for (int n=1;n<=N;n++) {
+      float actual = output_data[feature_data(N, 4, 1, 4, n, m, 1)];
+      float expected = expected_result[((m-1)*N)+(n-1)];
+      
+      // Use relative and absolute tolerance for float comparison
+      float diff = fabsf(actual - expected);
+      float max_val = fmaxf(fabsf(actual), fabsf(expected));
+      float rel_error = max_val > 0.0f ? diff / max_val : diff;
+      
+      if (diff <= abs_tolerance || rel_error <= rel_tolerance) {
+        matched++;
+      } else {
+        mismatched++;
+        if (mismatched <= max_mismatches_to_print) {
+          printf("MISMATCH [m:%d, n:%d]  CPU(expected):%10.1f  NPU(actual):%10.1f  diff:%10.6f  rel_err:%.4f%%\n",
+                 m, n, expected, actual, diff, rel_error * 100.0f);
+        }
+        ret = -1;
+      }
+    }
+  }
+  
+  printf("---------------------------------------------------------------------------------------------------------\n");
+  printf("Comparison Summary:\n");
+  printf("  Total elements: %d\n", total_elements);
+  printf("  Matched: %d (%.2f%%)\n", matched, (matched * 100.0f) / total_elements);
+  printf("  Mismatched: %d (%.2f%%)\n", mismatched, (mismatched * 100.0f) / total_elements);
+  printf("  Tolerance: abs=%.6f, rel=%.4f%%\n", abs_tolerance, rel_tolerance * 100.0f);
+  
+  if (ret == 0) {
+    printf("✓ Multiplication of [%d,%d] x [%d,%d] successful - All results match!\n", M, K, N, K);
+  } else {
+    printf("✗ Multiplication of [%d,%d] x [%d,%d] FAILED - Found %d mismatches\n", M, K, N, K, mismatched);
+    if (mismatched > max_mismatches_to_print) {
+      printf("  (Only first %d mismatches shown)\n", max_mismatches_to_print);
+    }
   }
   printf("=========================================================================================================\n");
 

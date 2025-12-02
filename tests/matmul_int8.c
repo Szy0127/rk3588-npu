@@ -30,7 +30,11 @@
 #include <time.h>
 #include <sys/mman.h>
 
+#ifdef __ANDROID__
+#include "drm-compat.h"
+#else
 #include <libdrm/drm.h>
+#endif
 
 #include "rknpu-ioctl.h"
 #include "npu_interface.h"
@@ -74,17 +78,28 @@ int main(int argc, char **argv) {
   unsigned int M=0;
   unsigned int K=0;
   unsigned int N=0;
+  unsigned int core_id = 0;  // Default to core 0
 
   int ret=0;
 
-  if (argc !=4) {
-    printf("Invalid number of args %d, needs to supply M K N ie matmul_fp16 <M> <K> <N>\n",argc);
+  if (argc != 4 && argc != 5) {
+    printf("Invalid number of args %d, needs to supply M K N [core_id]\n", argc);
+    printf("Usage: %s <M> <K> <N> [core_id]\n", argv[0]);
+    printf("  core_id: optional, 0-3 (default: 0)\n");
     return -1;
   }
 
   M = atoi(argv[1]);
   K = atoi(argv[2]);
   N = atoi(argv[3]);
+  
+  if (argc == 5) {
+    core_id = atoi(argv[4]);
+    if (core_id > 3) {
+      printf("Invalid core_id %d, must be 0-3\n", core_id);
+      return -1;
+    }
+  }
 
   if ((M<=0) || (M>MAX_M) | (((M%4)!=0) && (M!=1))) {
     printf("M [%d] is out of range or not a mutliple of 4 \n",M);
@@ -101,11 +116,13 @@ int main(int argc, char **argv) {
     return -1;
   }
 
+  printf("M is %d, K is %d, N is %d, using NPU core %d\n", M, K, N, core_id);
   // Open DRI called "rknpu"
   int fd = npu_open();
 
   uint64_t regcmd_dma, regcmd_obj;
   uint32_t regcmd_handle;
+  printf("regcmd_dma is %lx, regcmd_obj is %lx, regcmd_handle is %d\n", regcmd_dma, regcmd_obj, regcmd_handle);
   uint64_t *regcmd = mem_allocate(fd, 1024, &regcmd_dma, &regcmd_obj, 0, &regcmd_handle);
 
   uint64_t tasks_dma, tasks_obj;
@@ -191,6 +208,11 @@ int main(int argc, char **argv) {
 
   matmul_int(M,K,N,(int8_t *)&matrixA, (int8_t *)&matrixB, (int32_t *)&expected_result);
 
+  // Initialize subcore_task array
+  struct rknpu_subcore_task subcore_tasks[5] = {{0, 0}, {0, 0}, {0, 0}, {0, 0}, {0, 0}};
+  subcore_tasks[core_id].task_start = 0;
+  subcore_tasks[core_id].task_number = 1;
+  
   struct rknpu_submit submit = {
     .flags = RKNPU_JOB_PC | RKNPU_JOB_BLOCK | RKNPU_JOB_PINGPONG,
     .timeout = 6000,
@@ -202,13 +224,14 @@ int main(int argc, char **argv) {
     .regcfg_obj_addr = 0,
     .task_base_addr = 0,
     .user_data = 0,
-    .core_mask = 1,
+    .core_mask = 1 << core_id,  // Set bit for the specified core
     .fence_fd = -1,
-    .subcore_task = { // Only use core 1, nothing for core 2/3
-      {
-        .task_start = 0,
-        .task_number = 1,
-      }, { 1, 0}, {2, 0}, {0,0}, {0,0}
+    .subcore_task = {
+      subcore_tasks[0],
+      subcore_tasks[1],
+      subcore_tasks[2],
+      subcore_tasks[3],
+      subcore_tasks[4]
     },
   };
   ret = ioctl(fd, DRM_IOCTL_RKNPU_SUBMIT, &submit);
@@ -218,19 +241,43 @@ int main(int argc, char **argv) {
   }
 
   printf("=========================================================================================================\n");
+  printf("Comparing CPU (expected) vs NPU (actual) results...\n");
   int32_t *output_data = (int32_t*) output;
+  int total_elements = M * N;
+  int matched = 0;
+  int mismatched = 0;
+  int max_mismatches_to_print = 10;  // Limit printed mismatches
+  
   for (int m=1;m<=M;m++) {
-    for (int n=1;n<N;n++) {
+    for (int n=1;n<=N;n++) {
       int32_t actual = output_data[feature_data(N, M, 1, 4, n, m, 1)];
       int32_t expected = expected_result[((m-1)*N)+(n-1)];
-      if (actual != expected) {
-        printf("\nmismatch m:%d n:%d  expected:%d acutal:%d \n",m,n,expected,actual);
+      if (actual == expected) {
+        matched++;
+      } else {
+        mismatched++;
+        if (mismatched <= max_mismatches_to_print) {
+          printf("MISMATCH [m:%d, n:%d]  CPU(expected):%d  NPU(actual):%d  diff:%d\n",
+                 m, n, expected, actual, actual - expected);
+        }
         ret = -1;
       }
     }
   }
+  
+  printf("---------------------------------------------------------------------------------------------------------\n");
+  printf("Comparison Summary:\n");
+  printf("  Total elements: %d\n", total_elements);
+  printf("  Matched: %d (%.2f%%)\n", matched, (matched * 100.0f) / total_elements);
+  printf("  Mismatched: %d (%.2f%%)\n", mismatched, (mismatched * 100.0f) / total_elements);
+  
   if (ret == 0) {
-   printf("Multiplication of [%d,%d] x [%d,%d] succesful \n",M,K,N,K);	  
+    printf("✓ Multiplication of [%d,%d] x [%d,%d] successful - All results match!\n", M, K, N, K);
+  } else {
+    printf("✗ Multiplication of [%d,%d] x [%d,%d] FAILED - Found %d mismatches\n", M, K, N, K, mismatched);
+    if (mismatched > max_mismatches_to_print) {
+      printf("  (Only first %d mismatches shown)\n", max_mismatches_to_print);
+    }
   }
   printf("=========================================================================================================\n");
 

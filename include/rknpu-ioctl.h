@@ -10,7 +10,11 @@
 #include <linux/ioctl.h>
 #include <linux/types.h>
 
+#ifdef __ANDROID__
+#include "drm-compat.h"
+#else
 #include <libdrm/drm.h>
+#endif
 
 #if !defined(__KERNEL__)
 #define __user

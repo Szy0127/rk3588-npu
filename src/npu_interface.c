@@ -50,12 +50,14 @@ void* mem_allocate(int fd, size_t size, uint64_t *dma_addr, uint64_t *obj, uint3
     printf("RKNPU_MEM_MAP failed %d\n",ret);
     return NULL;
   }
+  printf("mem_create.dma_addr is %lx, mem_create.obj_addr is %lx, mem_create.handle is %d\n", mem_create.dma_addr, mem_create.obj_addr, mem_create.handle);
 
   void *map = mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, mem_map.offset);
 
   *dma_addr = mem_create.dma_addr;
   *obj = mem_create.obj_addr;
   *handle = mem_create.handle;
+  printf("map is %p\n", map);
   return map;
 }
 
@@ -80,6 +82,7 @@ int npu_open() {
   memset(buf1, 0 ,sizeof(buf1));
   memset(buf2, 0 ,sizeof(buf2));
   memset(buf3, 0, sizeof(buf3));
+  printf("buf1 is %s, buf2 is %s, buf3 is %s\n", buf1, buf2, buf3);
 
   // Open DRI called "rknpu"
   int fd = open("/dev/dri/card1", O_RDWR);
@@ -96,13 +99,14 @@ int npu_open() {
   dv.date_len = sizeof(buf2);
   dv.desc = buf3;
   dv.desc_len = sizeof(buf3);
-
+  printf("dv.name is %s, dv.date is %s, dv.desc is %s\n", dv.name, dv.date, dv.desc);
   int ret = ioctl(fd, DRM_IOCTL_VERSION, &dv);
+  printf("ret is %d\n", ret);
   if (ret <0) {
     printf("DRM_IOCTL_VERISON failed %d\n",ret);
     return ret;
   }
-  printf("drm name is %s - %s - %s\n", dv.name, dv.date, dv.desc);
+  //printf("drm name is %s - %s - %s\n", dv.name, dv.date, dv.desc);
   return fd;
 }
 
